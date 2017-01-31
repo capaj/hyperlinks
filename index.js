@@ -1,18 +1,36 @@
 /* global store, config */
-const { shell } = require('electron')
+const {
+  shell
+} = require('electron')
 const escapeHTML = require('escape-html')
 const emailRegex = require('email-regex')
 const urlRegex = require('./url-regex')
 const exec = require('child_process').exec
+const path = require('path')
+const emailRe = emailRegex({
+  exact: true
+})
+const stackTraceRe = /\s\((.*\.\w*:\d*:\d*)\)/g
+// const stackTraceEndRe = /:\d*:\d*$/
 
-const emailRe = emailRegex({ exact: true })
-const stackTraceRe = /\((\/.*:\d*:\d*)\)/g
-
-exports.getTermProps = function (uid, parentProps, props) {
-  return Object.assign(props, {uid})
+module.exports.getTermProps = function (uid, parentProps, props) {
+  return Object.assign(props, {
+    uid
+  })
 }
 
-exports.decorateTerm = function (Term, { React }) {
+let cwd
+exports.middleware = (store) => (next) => (action) => {
+  if (action.type === 'SESSION_SET_CWD') {
+    cwd = action.cwd
+  }
+  next(action)
+}
+
+module.exports.decorateTerm = function (Term, {
+  React
+}) {
+  console.log(Term)
   return class extends React.Component {
     constructor (props, context) {
       super(props, context)
@@ -28,7 +46,10 @@ exports.decorateTerm = function (Term, { React }) {
       }
 
       this.term = term
-      const { screen_, onTerminalReady } = term
+      const {
+        screen_,
+        onTerminalReady
+      } = term
 
       this.overrideScreen(screen_.constructor)
 
@@ -49,16 +70,12 @@ exports.decorateTerm = function (Term, { React }) {
 
       const self = this
 
-      const { insertString, deleteChars } = Screen.prototype
+      const {
+        insertString
+      } = Screen.prototype
 
       Screen.prototype.insertString = function () {
         const result = insertString.apply(this, arguments)
-        self.autolink(this)
-        return result
-      }
-
-      Screen.prototype.deleteChars = function () {
-        const result = deleteChars.apply(this, arguments)
         self.autolink(this)
         return result
       }
@@ -72,18 +89,31 @@ exports.decorateTerm = function (Term, { React }) {
         screen.cursorRowNode_.replaceChild(cursorNode, screen.cursorNode_)
         screen.cursorNode_ = cursorNode
       }
-
-      const rows = []
-      let lastRow = screen.cursorRowNode_
-
-      while (true) {
-        rows.unshift(lastRow)
-        if (lastRow.children.length > 1) break
-        lastRow = lastRow.previousSibling
-        if (!lastRow || !lastRow.getAttribute('line-overflow')) break
+      if (!this.previousRow) {
+        this.previousRow = screen.cursorRowNode_
+        return
       }
 
-      const textContent = rows.map((r) => r.lastChild.textContent).join('')
+      let currentRow = screen.cursorRowNode_
+      
+      if (this.previousRow === currentRow) {
+        console.log('lastRow', currentRow.textContent)
+        return
+      }
+      let {previousRow} = this
+      this.beforePreviousRow = this.previousRow
+      this.previousRow = currentRow
+      let rows = []
+      
+      while (true) {
+        rows.unshift(previousRow)
+        if (previousRow.children.length > 0) break
+        previousRow = previousRow.previousSibling
+        if (!previousRow || !previousRow.getAttribute('line-overflow')) break
+      }
+
+      let textContent = rows.map((r) => r.lastChild.textContent).join('')
+
       const re = urlRegex()
       const urls = []
       let match
@@ -94,17 +124,32 @@ exports.decorateTerm = function (Term, { React }) {
         const start = re.lastIndex - text.length
         const end = re.lastIndex
         const id = this.id++
-        urls.push({id, url, start, end})
+        urls.push({
+          id,
+          url,
+          start,
+          end
+        })
       }
 
       if (!urls.length) {
-        match = stackTraceRe.exec(textContent)
+        match = textContent.match(stackTraceRe)
         if (match) {
-          const url = match[1]
-          const start = textContent.indexOf('/')
-          const end = textContent.indexOf(')')
+          const start = textContent.lastIndexOf('(') + 1
+          const end = textContent.lastIndexOf(')')
+          let url = textContent.substring(start, end)
+          if (!url.startsWith('/')) {
+            url = path.join(cwd, url)
+          }
+
           const id = this.id++
-          urls.push({id, url, start, end, fileName: url})
+          urls.push({
+            id,
+            url,
+            start,
+            end,
+            fileName: url
+          })
         }
       }
       if (!urls.length) return
@@ -121,7 +166,13 @@ exports.decorateTerm = function (Term, { React }) {
         let html = ''
 
         while (urls[urlIndex]) {
-          const { id, url, start, end, fileName } = urls[urlIndex]
+          const {
+            id,
+            url,
+            start,
+            end,
+            fileName
+          } = urls[urlIndex]
 
           if (start > textStart) {
             const textEnd = start < rowEnd ? start : rowEnd
@@ -132,10 +183,12 @@ exports.decorateTerm = function (Term, { React }) {
             const urlStart = start > rowStart ? start : rowStart
             const urlEnd = end < rowEnd ? end : rowEnd
             let anchor
+
             if (fileName) {
               anchor = `<a href="${escapeHTML(url)}" data-id="${id}" data-file-name="${fileName}">`
+            } else {
+              anchor = `<a href="${escapeHTML(url)}" data-id="${id}">`
             }
-            anchor = `<a href="${escapeHTML(url)}" data-id="${id}">`
             html += anchor
             html += escapeHTML(textContent.slice(urlStart, urlEnd))
             html += '</a>'
@@ -195,7 +248,9 @@ exports.decorateTerm = function (Term, { React }) {
     onLinkMouseOver (e) {
       if (e.target.nodeName !== 'A') return
 
-      const { id } = e.target.dataset
+      const {
+        id
+      } = e.target.dataset
       for (const a of this.getAnchors(id)) {
         a.classList.add('hover')
       }
@@ -204,7 +259,9 @@ exports.decorateTerm = function (Term, { React }) {
     onLinkMouseOut (e) {
       if (e.target.nodeName !== 'A') return
 
-      const { id } = e.target.dataset
+      const {
+        id
+      } = e.target.dataset
       for (const a of this.getAnchors(id)) {
         a.classList.remove('hover')
       }
