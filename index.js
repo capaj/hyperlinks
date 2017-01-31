@@ -97,7 +97,7 @@ module.exports.decorateTerm = function (Term, {
       let currentRow = screen.cursorRowNode_
       
       if (this.previousRow === currentRow) {
-        console.log('lastRow', currentRow.textContent)
+        // console.log('lastRow', currentRow.textContent)
         return
       }
       let {previousRow} = this
@@ -113,6 +113,7 @@ module.exports.decorateTerm = function (Term, {
       }
 
       let textContent = rows.map((r) => r.lastChild.textContent).join('')
+      // console.log('textContent: ', textContent)
 
       const re = urlRegex()
       const urls = []
@@ -134,9 +135,26 @@ module.exports.decorateTerm = function (Term, {
 
       if (!urls.length) {
         match = textContent.match(stackTraceRe)
+        const alternativeMatch = textContent.match(/\s{0}(.*\.\w*:\d*:\d*)/)
         if (match) {
           const start = textContent.lastIndexOf('(') + 1
           const end = textContent.lastIndexOf(')')
+          let url = textContent.substring(start, end)
+          if (!url.startsWith('/')) {
+            url = path.join(cwd, url)
+          }
+
+          const id = this.id++
+          urls.push({
+            id,
+            url,
+            start,
+            end,
+            fileName: url
+          })
+        } else if (alternativeMatch) {  // used for standard.js output for example
+          const start = textContent.indexOf(alternativeMatch[0])
+          const end = textContent.indexOf(alternativeMatch[0]) + alternativeMatch[0].length
           let url = textContent.substring(start, end)
           if (!url.startsWith('/')) {
             url = path.join(cwd, url)
